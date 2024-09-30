@@ -9,6 +9,9 @@ dependencies:
 
   # MDAnalysis
   - MDAnalysis
+  - Cython
+  - scipy
+  - numpy
 
   # Testing
   - pytest

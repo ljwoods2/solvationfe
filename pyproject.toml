@@ -2,6 +2,8 @@
 requires = [
   "setuptools >=61.2",
   "versioningit",
+  "Cython",
+  "numpy",
 ]
 build-backend = "setuptools.build_meta"
 
@@ -18,7 +20,8 @@ maintainers = [
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
-    "MDAnalysis>=2.0.0",
+    "MDAnalysis>=2.7.0",
+    "numpy",
 ]
 keywords = [
     "molecular simulations",
