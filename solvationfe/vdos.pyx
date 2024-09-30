@@ -3,6 +3,9 @@ from scipy.fft import fft
 import numpy as np
 cimport numpy as np
 cimport vdos
+import logging
+
+logger = logging.getLogger(__name__)
 
 cdef class VDoS:
 
@@ -10,8 +13,8 @@ cdef class VDoS:
     cdef int nCorr
     cdef vdos.t_residueList residueList
     cdef vdos.t_MDinfo MDinfo
-    cdef float [:, :, :] atomPositions
-    cdef float [:, :, :] atomVelocities
+    cdef float [:, :] atomPositions
+    cdef float [:, :] atomVelocities
 
     cdef double [:] totCorr 
     cdef double [:] trCorr
@@ -22,6 +25,19 @@ cdef class VDoS:
     cdef double [:, :] resTrCorrs
     cdef double [:, :] resRotCorrs
     cdef double [:, :] resRotBondCorrs
+
+    cdef object sel
+
+    cdef float [:] tau
+    cdef float [:] wavenumber
+    cdef double [:, :] totVACF
+    cdef double [:, :] totVDoS
+    cdef double [:, :, :] trVACF
+    cdef double [:, :, :] trVDoS
+    cdef double [:, :, :] rotVACF
+    cdef double [:, :, :] rotVDoS
+    cdef double [:, :] rotBondVACF
+    cdef double [:, :] rotBondVDoS
 
     # def __cinit__(self):
         
@@ -38,14 +54,14 @@ cdef class VDoS:
         # -> translation VACF / VDoS (3D)
         # -> rotation VACF / VDoS (3D)
         # -> rotatable bonds VACF / VDoS (1D)
-        self.totVACF     = np.zeros((self.nRes+1,    nCorr), dtype = np.float32)
-        self.totVDoS     = np.zeros((self.nRes+1,    nCorr), dtype = np.float32)
-        self.trVACF      = np.zeros((self.nRes+1, 3, nCorr), dtype = np.float32)
-        self.trVDoS      = np.zeros((self.nRes+1, 3, nCorr), dtype = np.float32)
-        self.rotVACF     = np.zeros((self.nRes+1, 3, nCorr), dtype = np.float32)
-        self.rotVDoS     = np.zeros((self.nRes+1, 3, nCorr), dtype = np.float32)
-        self.rotBondVACF = np.zeros((self.nRes+1,    nCorr), dtype = np.float32)
-        self.rotBondVDoS = np.zeros((self.nRes+1,    nCorr), dtype = np.float32)
+        self.totVACF     = np.zeros((self.nRes+1,    nCorr), dtype = np.float64)
+        self.totVDoS     = np.zeros((self.nRes+1,    nCorr), dtype = np.float64)
+        self.trVACF      = np.zeros((self.nRes+1, 3, nCorr), dtype = np.float64)
+        self.trVDoS      = np.zeros((self.nRes+1, 3, nCorr), dtype = np.float64)
+        self.rotVACF     = np.zeros((self.nRes+1, 3, nCorr), dtype = np.float64)
+        self.rotVDoS     = np.zeros((self.nRes+1, 3, nCorr), dtype = np.float64)
+        self.rotBondVACF = np.zeros((self.nRes+1,    nCorr), dtype = np.float64)
+        self.rotBondVDoS = np.zeros((self.nRes+1,    nCorr), dtype = np.float64)
 
         # Alloc correlation arrays (passed to C codes)
         self.totCorr = np.zeros(self.nCorr)
@@ -60,8 +76,8 @@ cdef class VDoS:
         self.resRotBondCorrs = np.zeros((self.nRes, self.nCorr))
 
         # Alloc pos, vel arrays to allow copying later on
-        self.atomPositions = np.zeros((self.sel.n_atoms, 3, 3), dtype = np.float32)
-        self.atomVelocities = np.zeros((self.sel.n_atoms, 3, 3), dtype = np.float32)
+        # self.atomPositions = np.zeros((self.sel.n_atoms, 3, 3), dtype = np.float32)
+        # self.atomVelocities = np.zeros((self.sel.n_atoms, 3, 3), dtype = np.float32)
         
         # initialize residueList and MDinfo
         self.prep()
@@ -110,7 +126,7 @@ cdef class VDoS:
                 print(f'ERROR reported by allocResidue\n')
             r += 1
         vdos.setArrayIndexOffsets(&self.residueList, &self.MDinfo)
-        cdef int [:] dihed = self.sel.intra_dihedrals.indices.astype(np.int32)
+        cdef int [:, :] dihed = self.sel.intra_dihedrals.indices.astype(np.int32)
         cdef int [:, :] resAtomRangeList = np.zeros((len(self.sel.residues),2), dtype = np.int32)
         i = 0
         for res in self.sel.residues:
@@ -121,7 +137,7 @@ cdef class VDoS:
         error = vdos.getRotBonds(
             &self.residueList,
             self.nRes,
-            &dihed[0],
+            &dihed[0][0],
             len(dihed),
             &resAtomRangeList[0][0],
             self.nCorr
@@ -133,13 +149,13 @@ cdef class VDoS:
     cpdef processStep(self, int tStep, float time):
         if tStep < self.nCorr:
             self.tau[tStep] = time
-        self.atomPositions[:] = self.sel.atoms.positions.astype(np.float32)
-        self.atomVelocities[:] = self.sel.atoms.velocities.astype(np.float32)
+        self.atomPositions = np.asarray(self.sel.atoms.positions).view(np.float32)
+        self.atomVelocities = np.asarray(self.sel.atoms.velocities).view(np.float32)
         error = vdos.processStep(
             tStep,
             &self.MDinfo,
-            &self.atomPositions[0][0][0],
-            &self.atomVelocities[0][0][0],
+            &self.atomPositions[0][0],
+            &self.atomVelocities[0][0],
             &self.residueList,
             self.nCorr
         )
@@ -150,7 +166,7 @@ cdef class VDoS:
 
         period = (self.tau[1] - self.tau[0]) * (2 * self.nCorr - 1)
         wn0 = (1.0 / period) * 33.35641
-        self.wavenumber = np.arange(0,self.nCorr) * wn0
+        self.wavenumber = np.arange(0,self.nCorr, dtype=np.float32) * wn0
         self.totVACF[0] = self.totCorr[0:self.nCorr]
         self.symFT(self.totVACF[0], self.totVDoS[0])
 
